@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>벽돌깨기 — 겨울안전 퀴즈</title>
+<style>
+  :root{
+    --bg:#0a0e17;        /* 깊은 남색 배경 */
+    --ink:#e6f0ff;       /* HUD 글자색 */
+    --accent:#00ffd5;    /* 네온 포인트 */
+    --accent2:#ff4d6d;
+    --panel:#121826;     /* 패널 */
+    --line:#1b2233;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 50% 10%, #10182a 10%, var(--bg) 60%)}
+  body{display:flex;flex-direction:column;align-items:center;gap:12px;font-family: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;color:var(--ink)}
+  header{width:min(100%,960px); display:flex;justify-content:space-between; align-items:center; padding:10px 14px; border:1px solid var(--line); background:linear-gradient(180deg, #121826, #0f1524); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.35); position:relative}
+  header .hud{font-weight:900; letter-spacing:1px; text-shadow:0 0 6px rgba(0,255,213,.35)}
+  #timer{position:absolute; left:50%; transform:translateX(-50%); font-weight:900; letter-spacing:1px; text-shadow:0 0 6px rgba(0,255,213,.35)}
+  #wrap{position:relative; width:min(100%,960px); aspect-ratio:4/3; border:1px solid var(--line); border-radius:16px; overflow:hidden; box-shadow: 0 20px 40px rgba(0,0,0,.45)}
+  canvas{width:100%; height:100%; display:block; background: repeating-linear-gradient(180deg, #0b1120 0 2px, #0a1020 2px 4px)}
+
+  /* CRT 스캔라인 + 글로우 */
+  #wrap::after{
+    content:""; position:absolute; inset:0; pointer-events:none; mix-blend-mode:screen;
+    background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 3px);
+    background-size:100% 4px; opacity:.35; filter:drop-shadow(0 0 10px rgba(0,255,213,.05));
+  }
+
+  /* 오버레이 */
+  .overlay{position:absolute; inset:0; display:none; align-items:center; justify-content:center; backdrop-filter: blur(2px);} 
+  .overlay.show{display:flex}
+  .panel{background:linear-gradient(180deg, #0d162a, #0b1222); border:1px solid var(--line); border-radius:16px; width:min(92%,720px); max-height:86%; overflow:auto; box-shadow:0 18px 50px rgba(0,0,0,.5)}
+  .panel header{background:none; border:none; box-shadow:none; width:100%; border-bottom:1px solid var(--line); border-radius:16px 16px 0 0}
+  .panel .content{padding:18px}
+  .panel h2{margin:0 0 8px 0; font-size:20px; letter-spacing:1px}
+  .panel .choices{display:grid; gap:10px; margin:12px 0}
+  .panel .choices label{display:grid; grid-template-columns:18px 1fr; gap:8px; align-items:start; padding:8px 10px; border:1px solid #2b3856; border-radius:10px; background:rgba(255,255,255,0.02)}
+  .panel .choices.revealed input{pointer-events:none}
+  .panel .choices label.correct{border-color:#2dd4bf; background:rgba(45,212,191,.12); box-shadow:0 0 0 2px rgba(45,212,191,.25) inset}
+  .panel .choices label.wrong{border-color:#ff6b6b; background:rgba(255,107,107,.12); box-shadow:0 0 0 2px rgba(255,107,107,.25) inset}
+  .panel button{font-family:inherit; cursor:pointer; border:1px solid var(--accent); color:var(--ink); background:transparent; padding:10px 14px; border-radius:12px; font-weight:800; letter-spacing:1px}
+  .panel button:hover{box-shadow:0 0 0 3px rgba(0,255,213,.12) inset}
+  .pill{display:inline-block; padding:4px 10px; border:1px solid #26406a; border-radius:999px; font-weight:800; font-size:12px; color:#a9c0ff; letter-spacing:.5px}
+  .status{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; text-align:center}
+  .status .msg{font-size:28px; font-weight:900; letter-spacing:2px; color:var(--accent); text-shadow:0 0 12px rgba(0,255,213,.35)}
+  .status .msg.red{color:#ff5b5b; text-shadow:0 0 12px rgba(255,80,80,.35)}
+
+  input[type="text"]{outline:none}
+</style>
+</head>
+<body>
+  <header>
+    <div class="hud" id="life">LIFE ♥♥♥♥</div>
+    <div class="hud" id="timer">⏱ 05:00</div>
+    <div class="hud" id="score">SCORE 0000</div>
+  </header>
+
+  <div id="wrap">
+    <canvas id="game" width="960" height="720" aria-label="벽돌깨기 게임"></canvas>
+
+    <!-- 상태 메시지 -->
+    <div class="status" id="status">
+      <div class="msg" id="statusMsg">PRESS ENTER</div>
+    </div>
+
+    <!-- 퀴즈 모달 -->
+    <div class="overlay" id="quizOverlay" role="dialog" aria-modal="true">
+      <div class="panel">
+        <header style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px">
+          <div class="pill" id="quizBadge">겨울안전 퀴즈</div>
+          <div class="pill" id="quizBonus">BONUS +1000</div>
+        </header>
+        <div class="content">
+          <h2 id="qText">Q. 추운 날…?</h2>
+          <div class="choices" id="qChoices"></div>
+          <div id="qExplain" style="display:none; margin:8px 0 2px 0; color:#a6e3ff"></div>
+          <div style="display:flex; gap:10px; margin-top:8px; flex-wrap:wrap">
+            <button id="submitAnswer" title="Enter">정답 제출(Enter)</button>
+            <span class="pill">←/→/↑/↓ 또는 숫자키(1~4)로 선택 · 공개 후 Enter로 계속</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 종료 모달 -->
+    <div class="overlay" id="endOverlay" role="dialog" aria-modal="true">
+      <div class="panel">
+        <header style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px">
+          <div class="pill">결과</div>
+          <div class="pill" id="endTime">⏱ 00:00</div>
+        </header>
+        <div class="content">
+          <h2 id="endTitle">GAME OVER</h2>
+          <p id="endDetail" style="opacity:.9">최종 점수: 0</p>
+
+          <!-- 이름 입력란 (ALL CLEAR에서만 보임) -->
+          <div id="nameWrap" style="display:none; margin:12px 0; gap:8px; align-items:center; justify-content:flex-start; flex-wrap:wrap;">
+            <label for="playerName" class="pill" style="margin-right:8px">이름</label>
+            <input id="playerName" type="text" placeholder="이름을 입력하세요" maxlength="12"
+                   style="flex:1; min-width:220px; padding:10px 12px; border:1px solid #26406a; border-radius:10px; background:transparent; color:#e6f0ff; font-family:inherit; font-weight:800; letter-spacing:1px;">
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap">
+            <button id="btnRestart" title="Enter">다시하기(Enter)</button>
+            <button id="btnSavePng">PNG로 저장</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer style="opacity:.7; font-size:12px">
+    ←→ 로 이동, 스페이스: 일시정지/재개, Enter: 시작/재시작 & 퀴즈 제출/계속
+  </footer>
+
+<script>
+(function(){
+  // ===== 유틸 =====
+  const $ = sel => document.querySelector(sel);
+  const timerEl = $('#timer');
+  const scoreEl = $('#score');
+  const lifeEl = $('#life');
+  const statusEl = $('#status');
+  const statusMsg = $('#statusMsg');
+
+  // ===== 캔버스 세팅 =====
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // ===== 게임 상태 =====
+  let running = false;
+  let paused = false;
+  let over = false;
+  let score = 0;
+  let remaining = 300; // 5분
+  let lastTs = 0;
+  let redUnlocked = false;
+  let greensLeft = 5;
+  let yellowsLeft = 3;
+  let redsLeft = 2;
+  let lives = 4;
+
+  // ===== 패들 & 볼 =====
+  const paddle = { w:120, h:18, x:W/2-60, y:H-40, speed:580 };
+  const ball = { r:9, x:W/2, y:H-60, dx:240, dy:-260, speedUp:1.02, max:720 };
+
+  // ===== 벽돌 맵 =====
+  const COLS = 12, ROWS = 6, GAP=4;
+  const bw = Math.floor((W - (COLS+1)*GAP)/COLS);
+  const bh = 28;
+  const offsetTop = 80; const offsetLeft = Math.floor((W - (bw*COLS + GAP*(COLS+1)))/2);
+
+  const TYPE = { BASIC:'basic', GREEN:'green', YELLOW:'yellow', RED:'red' };
+
+  const greenPos = [ [2,1],[9,1],[3,2],[8,2],[5,3] ];       // 5개
+  const yellowPos = [ [4,0],[7,0],[6,3] ];                  // 3개
+  const redPos = [ [5,0],[6,0] ];                           // 2개(가운데 상단)
+
+  let bricks = [];
+  function makeBricks(){
+    bricks = [];
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const x = offsetLeft + GAP + c*(bw+GAP);
+        const y = offsetTop + GAP + r*(bh+GAP);
+        let type = TYPE.BASIC, color = getBasicColor(r), hp=1, locked=false;
+        if (hasCoord(greenPos,c,r)) { type=TYPE.GREEN; color=getStripe('#1e8e5a', '#35d07f'); hp=1; }
+        else if (hasCoord(yellowPos,c,r)) { type=TYPE.YELLOW; color=getStripe('#c7a700', '#f8d34b'); hp=2; }
+        else if (hasCoord(redPos,c,r)) { type=TYPE.RED; color=getStripe('#b6172f', '#ff5b5b'); hp=1; locked=true; }
+        bricks.push({x,y,w:bw,h:bh,type,color,hp,alive:true,locked});
+      }
+    }
+  }
+
+  function hasCoord(arr,c,r){return arr.some(p=>p[0]===c && p[1]===r)}
+  function getBasicColor(r){
+    const hues = ['#8aa0ff','#9ab3ff','#a8c5ff','#b7d3ff','#a4b4ff','#94a1ff'];
+    return getStripe('#5562d6', hues[r%hues.length]);
+  }
+  function getStripe(c1,c2){
+    const p = document.createElement('canvas'); p.width=20; p.height=20; const g=p.getContext('2d');
+    const grd = g.createLinearGradient(0,0,20,20); grd.addColorStop(0,c1); grd.addColorStop(1,c2);
+    g.fillStyle=grd; g.fillRect(0,0,20,20);
+    g.globalAlpha=.25; g.fillStyle="#000"; g.fillRect(0,0,20,20);
+    return ctx.createPattern(p,'repeat');
+  }
+
+  // ===== 입력 =====
+  const keys = {};
+  window.addEventListener('keydown', e=>{ 
+    keys[e.code]=true; 
+    if(e.code==='Space'){ e.preventDefault(); togglePause(); } 
+    if(e.code==='Enter'){
+      if($('#endOverlay').classList.contains('show') && !isTyping()){
+        $('#btnRestart').click();
+      } else if(!running||over){ startGame(); }
+    }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.code]=false });
+  document.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W/rect.width);
+    paddle.x = Math.max(0, Math.min(W - paddle.w, mx - paddle.w/2));
+  });
+
+  function isTyping(){
+    const el = document.activeElement; return el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA');
+  }
+
+  function togglePause(){ if(!running||over) return; paused = !paused; statusMsg.textContent = paused? 'PAUSED' : ''; statusEl.style.display = paused? 'flex':'none'; }
+
+  // ===== 타이머 =====
+  let timerI = null;
+  function startTimer(){
+    remaining = 300; updateTimerText();
+    if(timerI) clearInterval(timerI);
+    timerI = setInterval(()=>{
+      if(!running||paused) return;
+      remaining = Math.max(0, remaining - 1);
+      updateTimerText();
+      if(remaining<=0){ gameOver(false); }
+    },1000);
+  }
+  function updateTimerText(){
+    const m = String(Math.floor(remaining/60)).padStart(2,'0');
+    const s = String(remaining%60).padStart(2,'0');
+    timerEl.textContent = `⏱ ${m}:${s}`;
+  }
+
+  function updateLifeHUD(){ lifeEl.textContent = 'LIFE ' + '♥'.repeat(lives); }
+
+  // ===== 메인 루프 =====
+  function startGame(){
+    running = true; paused=false; over=false; score=0; redUnlocked=false; greensLeft=5; yellowsLeft=3; redsLeft=2; lives=4;
+    makeBricks();
+    resetBallPaddle();
+
+    statusMsg.textContent = ''; statusEl.style.display='none';
+    scoreEl.textContent = fmtScore(score);
+    updateLifeHUD();
+    startTimer();
+
+    requestAnimationFrame(loop);
+  }
+
+  function loop(ts){
+    if(!running) return;
+    const dt = lastTs? (ts - lastTs)/1000 : 0; lastTs = ts;
+    if(!paused && !over){ update(dt); draw(); }
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    if(keys['ArrowLeft']) paddle.x -= paddle.speed*dt;
+    if(keys['ArrowRight']) paddle.x += paddle.speed*dt;
+    paddle.x = Math.max(0, Math.min(W-paddle.w, paddle.x));
+
+    ball.x += ball.dx*dt; ball.y += ball.dy*dt;
+
+    if(ball.x < ball.r){ ball.x = ball.r; ball.dx *= -1; }
+    if(ball.x > W - ball.r){ ball.x = W - ball.r; ball.dx *= -1; }
+    if(ball.y < ball.r){ ball.y = ball.r; ball.dy *= -1; }
+
+    if(ball.y > H - ball.r){ loseLife(); return; }
+
+    if(rectCircleCollide(paddle, ball)){
+      const hit = (ball.x - (paddle.x + paddle.w/2)) / (paddle.w/2);
+      const speed = Math.min(Math.hypot(ball.dx, ball.dy)*ball.speedUp, ball.max);
+      const angle = hit * Math.PI/3;
+      ball.dx = speed * Math.sin(angle);
+      ball.dy = -Math.abs(speed * Math.cos(angle));
+      ball.y = paddle.y - ball.r - 1;
+    }
+
+    for(const b of bricks){
+      if(!b.alive) continue;
+      if(circleRectCollide(ball, b)){
+        if(b.type===TYPE.RED && (!redUnlocked || b.locked)){
+          flashStatus('RED LOCKED — 먼저 초록/노랑을 모두 깨야 해!', true); reflectBall(ball, b); continue;
+        }
+        b.hp -= 1; reflectBall(ball, b);
+        if(b.hp<=0){
+          b.alive = false;
+          if(b.type===TYPE.BASIC){ score += 100; scoreEl.textContent = fmtScore(score); }
+
+          if(b.type===TYPE.GREEN){ greensLeft = Math.max(0, greensLeft-1); openQuiz({bonus:1000, final:false}); }
+          if(b.type===TYPE.YELLOW){ yellowsLeft = Math.max(0, yellowsLeft-1); openQuiz({bonus:2000, final:false}); }
+          if(b.type===TYPE.RED){
+            redsLeft = Math.max(0, redsLeft-1);
+            const isFinal = (redsLeft===0);
+            openQuiz({bonus:isFinal?10000:5000, final:isFinal});
+          }
+
+          if(!redUnlocked && greensLeft===0 && yellowsLeft===0){
+            redUnlocked = true; bricks.filter(x=>x.type===TYPE.RED).forEach(x=>x.locked=false);
+            flashStatus('RED UNLOCKED! 빨강벽돌 격파 가능', false);
+          }
+        }
+        break;
+      }
+    }
+
+    if(bricks.every(b=>!b.alive)) gameOver(true);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+
+    ctx.globalAlpha = .06; ctx.fillStyle = '#9adfff';
+    for(let i=0;i<60;i++){ ctx.fillRect((i*73)%W, (i*41)%H, 2, 2); }
+    ctx.globalAlpha = 1;
+
+    for(const b of bricks){ if(!b.alive) continue; drawBrick(b); }
+
+    ctx.fillStyle = '#c7e3ff';
+    roundRect(ctx, paddle.x, paddle.y, paddle.w, paddle.h, 6, true);
+    ctx.globalAlpha=.25; ctx.fillStyle=getVar('--accent'); roundRect(ctx, paddle.x, paddle.y, paddle.w, paddle.h, 6, true); ctx.globalAlpha=1;
+
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+    const grd = ctx.createRadialGradient(ball.x-2, ball.y-2, 1, ball.x, ball.y, ball.r);
+    grd.addColorStop(0, '#fff'); grd.addColorStop(1, '#7cd7ff');
+    ctx.fillStyle = grd; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.stroke();
+
+    ctx.globalAlpha=.15; ctx.strokeStyle='#00ffd5'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(20,60); ctx.lineTo(W-20,60); ctx.stroke(); ctx.globalAlpha=1;
+
+    ctx.globalAlpha=.15; ctx.fillStyle = redUnlocked? getVar('--accent') : '#ff6b6b';
+    ctx.font='700 14px ui-monospace, monospace';
+    ctx.fillText(redUnlocked? '🔓 RED UNLOCKED' : '🔒 RED LOCKED', 20, 50);
+    ctx.globalAlpha=1;
+  }
+
+  function getVar(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim() || '#00ffd5'; }
+
+  function drawBrick(b){
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    // 패턴 대신 단순 그라디언트(가벼움)
+    const grd = ctx.createLinearGradient(0,0, b.w, b.h);
+    if(b.type==='green'){ grd.addColorStop(0,'#1e8e5a'); grd.addColorStop(1,'#35d07f'); }
+    else if(b.type==='yellow'){ grd.addColorStop(0,'#c7a700'); grd.addColorStop(1,'#f8d34b'); }
+    else if(b.type==='red'){ grd.addColorStop(0,'#b6172f'); grd.addColorStop(1,'#ff5b5b'); }
+    else { grd.addColorStop(0,'#5562d6'); grd.addColorStop(1,'#9aa7ff'); }
+    ctx.fillStyle = grd; roundRect(ctx, 0,0,b.w,b.h, 6, true);
+    ctx.strokeStyle = 'rgba(255,255,255,.15)'; ctx.strokeRect(0.5,0.5,b.w-1,b.h-1);
+    ctx.font='800 12px ui-monospace, monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    if(b.type==='green'){ ctx.fillStyle='#d9ffe6'; ctx.fillText('G', b.w/2, b.h/2); }
+    if(b.type==='yellow'){ ctx.fillStyle='#fff4c7'; ctx.fillText(b.hp===2?'Y(2)':'Y(1)', b.w/2, b.h/2); }
+    if(b.type==='red'){ ctx.fillStyle='#ffd6da'; ctx.fillText(redUnlocked?'R':'R🔒', b.w/2, b.h/2); }
+    ctx.restore();
+  }
+
+  function roundRect(ctx,x,y,w,h,r,fill){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+    if(fill) ctx.fill(); else ctx.stroke();
+  }
+
+  function rectCircleCollide(rect, c){
+    const cx = Math.max(rect.x, Math.min(c.x, rect.x+rect.w));
+    const cy = Math.max(rect.y, Math.min(c.y, rect.y+rect.h));
+    const dx = c.x - cx, dy = c.y - cy; return (dx*dx + dy*dy) <= (c.r*c.r);
+  }
+  function circleRectCollide(c, rect){ return rectCircleCollide(rect,c); }
+  function reflectBall(ball, rect){
+    const prevX = ball.x - Math.sign(ball.dx);
+    const prevY = ball.y - Math.sign(ball.dy);
+    const fromLeft = prevX < rect.x;
+    const fromRight = prevX > rect.x + rect.w;
+    const fromTop = prevY < rect.y;
+    const fromBottom = prevY > rect.y + rect.h;
+    if(fromLeft || fromRight){ ball.dx *= -1; }
+    if(fromTop || fromBottom){ ball.dy *= -1; }
+  }
+
+  function fmtScore(s){ return 'SCORE ' + String(s).padStart(4,'0'); }
+
+  function flashStatus(text, danger){
+    statusMsg.textContent = text; statusMsg.classList.toggle('red', !!danger); statusEl.style.display='flex';
+    clearTimeout(flashStatus._t);
+    flashStatus._t = setTimeout(()=>{ statusEl.style.display='none'; statusMsg.classList.remove('red'); }, 1200);
+  }
+
+  function resetBallPaddle(){
+    paddle.x = W/2 - paddle.w/2; paddle.y = H - 40;
+    ball.x = W/2; ball.y = H - 60; ball.dx = 240 * (Math.random()<.5? -1:1); ball.dy = -260;
+  }
+
+  function loseLife(){
+    if(over) return;
+    lives--; updateLifeHUD();
+    flashStatus('LIFE -1', true);
+    if(lives<=0){ gameOver(false); return; }
+    resetBallPaddle();
+    paused = true; setTimeout(()=>{ if(!over){ paused=false; } }, 700);
+  }
+
+  // ===== 퀴즈 =====
+  const quizOverlay = document.getElementById('quizOverlay');
+  const qText = document.getElementById('qText');
+  const qChoices = document.getElementById('qChoices');
+  const qExplain = document.getElementById('qExplain');
+  const quizBadge = document.getElementById('quizBadge');
+  const quizBonus = document.getElementById('quizBonus');
+  const btnSubmit = document.getElementById('submitAnswer');
+
+  const QUIZZES = shuffle([
+    {q:'난방기(보일러·화목난로·가스난로)를 사용할 때 반드시 해야 하는 안전수칙은?', c:['실내를 최대한 밀폐한다','정기적으로 환기한다','불꽃을 크게 키운다','젖은 빨래를 바로 위에 말린다'], a:1, e:'난방기 사용 시 일산화탄소(CO) 중독을 막기 위해 주기적으로 환기해야 합니다.'},
+    {q:'손발이 하얗게 변하고 감각이 둔해지는 동상 의심 상황에서 옳은 응급처치는?', c:['눈으로 세게 문지른다','뜨거운 물(50℃ 이상)로 빨리 데운다','미지근한 물(37~39℃)에 서서히 데운다','바람 쐬며 자연 회복을 기다린다'], a:2, e:'동상은 문지르면 조직 손상이 커지고, 너무 뜨거운 물도 금물입니다. 미지근한 물에 서서히 온도를 올립니다.'},
+    {q:'빙판길에서 안전하게 보행하는 방법으로 가장 알맞은 것은?', c:['보폭을 크게 하고 빨리 걷는다','손을 주머니에 넣고 걷는다','무게중심을 낮추고 보폭을 작게 한다','휴대폰 화면을 보며 천천히 걷는다'], a:2, e:'보폭을 작게 하고 무게중심을 낮춰 천천히 걷는 것이 안전합니다. 손은 주머니에서 빼 넘어질 때를 대비하세요.'},
+    {q:'겨울철 블랙아이스가 특히 잘 생기는 곳은?', c:['햇볕이 잘 드는 도로','터널과 교량, 그늘진 구간','도심 한가운데','신호등 앞 횡단보도만'], a:1, e:'교량·그늘진 구간·터널 출입구 등 노면 온도가 낮은 곳에서 블랙아이스가 잘 생깁니다.'},
+    {q:'전기장판을 안전하게 사용하는 방법으로 옳은 것은?', c:['접어서 사용한다','가장 높은 온도로 계속 틀어 둔다','두꺼운 이불을 여러 겹 덮는다','펴서 사용하고 장시간 고온을 피한다'], a:3, e:'전기장판은 접어 쓰면 화재 위험이 큽니다. 펴서 사용하고 장시간 고온을 피하세요.'},
+    {q:'폭설 후 자동차 시동을 걸 때 반드시 확인해야 할 것은?', c:['엔진오일 색','배기구(머플러) 막힘 여부','와이퍼 고무 색','타이어 휠 디자인'], a:1, e:'눈에 배기구가 막힌 상태에서 시동을 걸면 일산화탄소가 차내로 유입되어 매우 위험합니다.'},
+    {q:'제설(눈 치우기) 작업을 할 때 가장 주의할 점은?', c:['짧은 시간에 전력질주하듯 한다','허리를 굽혀 빠르게 퍼낸다','중간중간 쉬고, 몸을 풀며 한다','발이 미끄러지지 않도록 이동식 사다리를 쓴다'], a:2, e:'제설 작업은 무리하면 심혈관 부담이 큽니다. 스트레칭을 하고 중간중간 쉬어 주세요.'},
+    {q:'혹한에 장시간 야외 활동 후 몸이 떨리고 의식이 흐려진다면?', c:['무리해서라도 계속 움직인다','찬물로 샤워한다','따뜻한 장소로 이동해 보온·수분 보충을 한다','두꺼운 옷을 벗고 식힌다'], a:2, e:'저체온증이 의심됩니다. 따뜻한 장소로 이동해 마른 옷으로 갈아입고 보온·수분 보충을 합니다.'},
+    {q:'가정용 가스보일러 사용 시 CO 경보기(일산화탄소 경보기)는 어디에 설치하는 것이 좋은가?', c:['천장 한가운데 아무 곳이나','바닥 바로 위','보일러·가스기기 주변 벽면 높이(제조사 지침 준수)','현관문 바깥'], a:2, e:'제조사 지침 높이에 설치하고, 보일러·가스기기가 있는 공간 근처에 설치하는 것이 중요합니다.'},
+    {q:'빙판에서 넘어지려 할 때 비교적 안전한 자세는?', c:['손바닥을 펴고 바닥을 짚는다','머리부터 앞으로 숙여 넘어진다','몸을 웅크리고 옆으로 넘어간다','무릎을 쭉 편 채로 미끄러진다'], a:2, e:'몸을 웅크려 충격을 분산시키고, 옆으로 넘어지듯 하는 것이 상대적으로 안전합니다.'},
+    {q:'스키장/눈썰매장에서 지켜야 할 안전수칙은?', c:['내리막에서 정지 연습은 필요 없다','헬멧·보호장구를 착용한다','사람이 많은 곳에서 속도를 낸다','코스 역주행을 자주 한다'], a:1, e:'헬멧과 보호장구를 착용하고, 속도를 조절하며 코스 규칙을 지켜야 합니다.'},
+    {q:'겨울철 호흡기 질환 예방을 위한 가장 기본적인 방법은?', c:['손 씻기와 기침 예절 준수','마스크를 절대 쓰지 않는다','따뜻한 음료만 마신다','하루 종일 난방을 끈다'], a:0, e:'손 씻기와 기침 예절, 적절한 환기와 보온이 기본입니다.'},
+  ]);
+
+  const FINAL_QUIZZES = shuffle([
+    {q:'최후의 문제! 겨울철 눈폭풍·한파 대비 가정 안전 체크로 옳지 않은 것은?', c:['비상 물·손전등·건전지를 준비한다','난방기 점검과 환기를 병행한다','일산화탄소 경보기를 꺼 둔다','미끄럼 방지 신발을 준비한다'], a:2, e:'일산화탄소 경보기는 꺼두면 안 됩니다. 작동 상태를 항상 유지해야 합니다.'},
+    {q:'최후의 문제! 혹한 속 저체온증 응급 대처로 옳은 것은?', c:['뜨거운 욕조에 바로 넣는다','젖은 옷을 갈아입히고 담요로 덮는다','알코올을 마시게 한다','바람 쐬며 몸을 단련한다'], a:1, e:'젖은 옷을 벗기고 마른 옷으로 갈아입힌 뒤 담요로 보온합니다. 의료기관으로 이동하세요.'}
+  ]);
+
+  let quizKeyHandler = null;
+  let currentBonus = 0;
+
+  function openQuiz({bonus=1000, final=false}={}){
+    if(over) return;
+    paused = true; quizOverlay.classList.add('show');
+    currentBonus = bonus;
+    quizBadge.textContent = final? '최후의 문제' : '겨울안전 퀴즈';
+    quizBonus.textContent = (final? 'FINAL +' : 'BONUS +') + bonus;
+
+    const pool = final? FINAL_QUIZZES : QUIZZES;
+    const q = pool[Math.floor(Math.random()*pool.length)];
+
+    qText.textContent = 'Q. ' + q.q; qExplain.style.display='none'; qExplain.textContent='';
+    qChoices.innerHTML = ''; qChoices.classList.remove('revealed');
+
+    q.c.forEach((text, i)=>{
+      const id = 'c_'+Date.now()+'_'+i;
+      const label = document.createElement('label'); label.className='choice';
+      const radio = document.createElement('input'); radio.type='radio'; radio.name='quizChoice'; radio.value=i; radio.id=id; radio.style.marginTop='2px';
+      const span = document.createElement('span'); span.textContent = text;
+      label.appendChild(radio); label.appendChild(span); qChoices.appendChild(label);
+    });
+    let idx = 0; const radios = [...qChoices.querySelectorAll('input[name="quizChoice"]')]; if(radios[0]) radios[0].checked = true;
+
+    let revealed = false; // 정답 공개 여부
+    let handled = false;  // 점수/라이프 처리 1회만
+
+    const continuePlay = ()=>{
+      quizOverlay.classList.remove('show');
+      paused=false;
+      if(quizKeyHandler){ window.removeEventListener('keydown', quizKeyHandler); quizKeyHandler=null; }
+      if(lives<=0){ gameOver(false); }
+    };
+
+    const reveal = (isCorrect)=>{
+      if(revealed) return; revealed = true; qChoices.classList.add('revealed');
+      const choiceLabels = [...qChoices.querySelectorAll('label.choice')];
+      const selIndex = radios.findIndex(r=>r.checked);
+      choiceLabels.forEach((lab,i)=>{
+        if(i===q.a) lab.classList.add('correct');
+        if(i===selIndex && !isCorrect) lab.classList.add('wrong');
+      });
+      qExplain.style.display='block';
+      if(!handled){
+        handled = true;
+        if(isCorrect){ score += currentBonus; scoreEl.textContent = fmtScore(score); qExplain.textContent = `정답! +${currentBonus}점 보너스. ` + q.e; }
+        else { lives--; updateLifeHUD(); qExplain.textContent = '오답! 목숨 -1. ' + q.e; }
+      }
+      btnSubmit.textContent = '계속(Enter)';
+    };
+
+    btnSubmit.onclick = ()=>{
+      if(!revealed){
+        const sel = qChoices.querySelector('input[name="quizChoice"]:checked');
+        if(!sel){ qExplain.style.display='block'; qExplain.textContent='정답을 선택해 주세요.'; return; }
+        const isCorrect = Number(sel.value) === q.a;
+        reveal(isCorrect);
+      } else {
+        continuePlay();
+      }
+    };
+
+    if(quizKeyHandler){ window.removeEventListener('keydown', quizKeyHandler); }
+    quizKeyHandler = (e)=>{
+      const radios = [...qChoices.querySelectorAll('input[name="quizChoice"]')];
+      if(!quizOverlay.classList.contains('show')) return;
+      if(!revealed){
+        if(['ArrowDown','ArrowRight','KeyS','KeyD'].includes(e.code)){
+          idx = (idx+1) % radios.length; radios.forEach((r,i)=>r.checked = (i===idx)); e.preventDefault();
+        } else if(['ArrowUp','ArrowLeft','KeyW','KeyA'].includes(e.code)){
+          idx = (idx-1+radios.length) % radios.length; radios.forEach((r,i)=>r.checked = (i===idx)); e.preventDefault();
+        } else if(/^Digit[1-9]$/.test(e.code)){
+          const n = Math.min(9, Math.max(1, Number(e.code.replace('Digit','')))) - 1; if(radios[n]){ idx=n; radios.forEach((r,i)=>r.checked = (i===idx)); }
+        } else if(e.code==='Enter'){ btnSubmit.click(); e.preventDefault(); }
+      } else {
+        if(e.code==='Enter'){ continuePlay(); e.preventDefault(); }
+      }
+    };
+    window.addEventListener('keydown', quizKeyHandler);
+  }
+
+  function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+
+  // ===== 엔딩 / 저장 =====
+  const endOverlay = document.getElementById('endOverlay');
+  const endTitle = document.getElementById('endTitle');
+  const endDetail = document.getElementById('endDetail');
+  const endTime = document.getElementById('endTime');
+  const btnRestart = document.getElementById('btnRestart');
+  const btnSavePng = document.getElementById('btnSavePng');
+  const nameWrap = document.getElementById('nameWrap');
+  const playerName = document.getElementById('playerName');
+
+  btnRestart.onclick = ()=>{ endOverlay.classList.remove('show'); startGame(); };
+  btnSavePng.onclick = ()=>{ savePNG(endTitle.textContent); };
+
+  function savePNG(finalText){
+    const off = document.createElement('canvas'); off.width = W; off.height = H; const g = off.getContext('2d');
+    g.fillStyle = '#0a0e17'; g.fillRect(0,0,W,H);
+    g.drawImage(canvas,0,0);
+    g.fillStyle = 'rgba(0,0,0,0.65)'; g.fillRect(0, H-140, W, 140);
+    g.fillStyle = '#ffffff';
+    g.font = '700 34px ui-monospace, monospace'; g.fillText(finalText, 24, H-92);
+    g.font = '700 24px ui-monospace, monospace'; g.fillText('SCORE: '+score, 24, H-60);
+    const now = new Date();
+    const stamp = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    const pname = (playerName && playerName.value.trim()) || '';
+    const footer = (pname? ('NAME: '+pname+'   •   ') : '') + 'TIME LEFT: ' + timerEl.textContent.replace('⏱ ','') + '   •   SAVED: ' + stamp;
+    g.font = '600 16px ui-monospace, monospace'; g.fillText(footer, 24, H-32);
+
+    const url = off.toDataURL('image/png');
+    const a = document.createElement('a');
+    const safe = finalText.split(' ').join('_').toLowerCase();
+    a.href=url; a.download = `winter-breakout-${safe}-${Date.now()}.png`; a.click();
+  }
+
+  function gameOver(win){
+    over = true; running=false; if(timerI) clearInterval(timerI);
+    statusEl.style.display='flex';
+    const title = win ? 'ALL CLEAR' : 'GAME OVER';
+    statusMsg.innerHTML = win ? `🎉 ALL CLEAR!<br>최종 점수: ${score}` : `⏰ GAME OVER!<br>최종 점수: ${score}`;
+
+    endTitle.textContent = title;
+    endDetail.textContent = `최종 점수: ${score}`;
+    endTime.textContent = timerEl.textContent;
+
+    if(win){
+      nameWrap.style.display='flex';
+      if(playerName){ playerName.value=''; setTimeout(()=>playerName.focus(), 50); }
+    } else {
+      nameWrap.style.display='none';
+    }
+
+    endOverlay.classList.add('show');
+  }
+
+  // 초기 메시지
+  statusEl.style.display='flex';
+  statusMsg.innerHTML = 'PRESS ENTER';
+
+})();
+</script>
+</body>
+</html>
